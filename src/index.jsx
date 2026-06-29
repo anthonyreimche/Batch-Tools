@@ -346,7 +346,12 @@ function histFromBitmap(bmp) {
 
 /** Auto-correct tone and/or white balance on every selected photo. */
 async function runAuto({ tone, wb }, onProgress) {
-  if (!api.develop || !api.develop.captureFrame) return { error: "Auto needs captureFrame (unavailable in this build)." };
+  // renderPhotoFrame renders a SPECIFIC photo headlessly; captureFrame only
+  // renders the live Develop source, so it measured the wrong image for every
+  // photo but the open one. Require the newer API rather than silently misbehave.
+  if (!api.develop || !api.develop.renderPhotoFrame) {
+    return { error: "Batch Auto needs a newer Safelight (renderPhotoFrame API)." };
+  }
   const s = settings();
   const c = cat().getState();
   const ids = [...c.selectedIds];
@@ -360,10 +365,15 @@ async function runAuto({ tone, wb }, onProgress) {
 
   const errors = await forEachTarget(ids, restoreId, async (id, cur) => {
     const asShot = dev().getState().asShotTemperature ?? 6500;
+    // The photo's committed extension-stage params — passed to renderPhotoFrame
+    // so the measured frame matches what committing the trial params would render
+    // (stages that tint/tone the image are included), not the active photo's bag.
+    const bag = deepClone(dev().getState().paramBag) || {};
     let p = { ...cur };
     let toneDone = !tone, wbDone = !wb;
     for (let i = 0; i < cap && !(toneDone && wbDone); i++) {
-      const bmp = await api.develop.captureFrame(p);
+      const bmp = await api.develop.renderPhotoFrame(id, p, bag);
+      if (!bmp) break;
       const hist = histFromBitmap(bmp);
       if (bmp && typeof bmp.close === "function") bmp.close();
       if (!hist) break;

@@ -294,7 +294,9 @@ function histFromBitmap(bmp) {
   return { r, g, b, luma };
 }
 async function runAuto({ tone, wb }, onProgress) {
-  if (!api.develop || !api.develop.captureFrame) return { error: "Auto needs captureFrame (unavailable in this build)." };
+  if (!api.develop || !api.develop.renderPhotoFrame) {
+    return { error: "Batch Auto needs a newer Safelight (renderPhotoFrame API)." };
+  }
   const s = settings();
   const c = cat().getState();
   const ids = [...c.selectedIds];
@@ -305,10 +307,12 @@ async function runAuto({ tone, wb }, onProgress) {
   const restoreId = c.activePhotoId || dev().getState().photoId;
   const errors = await forEachTarget(ids, restoreId, async (id, cur) => {
     const asShot = dev().getState().asShotTemperature ?? 6500;
+    const bag = deepClone(dev().getState().paramBag) || {};
     let p = { ...cur };
     let toneDone = !tone, wbDone = !wb;
     for (let i = 0; i < cap && !(toneDone && wbDone); i++) {
-      const bmp = await api.develop.captureFrame(p);
+      const bmp = await api.develop.renderPhotoFrame(id, p, bag);
+      if (!bmp) break;
       const hist = histFromBitmap(bmp);
       if (bmp && typeof bmp.close === "function") bmp.close();
       if (!hist) break;

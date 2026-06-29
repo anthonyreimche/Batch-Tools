@@ -27,7 +27,7 @@ Batch versions of the per-photo **Auto Tone** and **Auto White Balance** found i
 - **Auto WB** — gray-world white balance: sets temperature and tint.
 - **Auto Tone + WB** — both in one pass.
 
-Each photo is analysed by rendering it with `api.develop.captureFrame`, building a histogram, and running the same convergence loop the core Auto buttons use (re-render → re-measure, a few passes), then committing one undoable history entry. The same algorithm as the core `auto-adjust` is used, so batch results match the per-photo buttons. Large selections honour the "Confirm when applying to more than" threshold, since each photo is rendered several times.
+Each photo is analysed by rendering it headlessly with `api.develop.renderPhotoFrame(photoId, params, paramBag)` — which renders that specific photo through the full pipeline (carrying its own extension-stage params), unlike `captureFrame`, which only renders the live Develop source — building a histogram, and running the same convergence loop the core Auto buttons use (re-render → re-measure, a few passes), then committing one undoable history entry. The same algorithm as the core `auto-adjust` is used, so batch results match the per-photo buttons. Large selections honour the "Confirm when applying to more than" threshold, since each photo is rendered several times.
 
 ## Speed Edit
 
@@ -75,4 +75,4 @@ React is taken from `api.react` at activate time and is not bundled. UI uses inl
 
 - The clipboard, scope and mode live in a small shared store (`api.stores.create`), so the panel buttons and the global keyboard shortcuts always agree.
 - The engine drives the develop store (`loadEdit → commitEdit`) per photo, so persistence, undo history and cross-window broadcast behave exactly like manual edits. The original develop session is restored when a batch finishes (including after a Copy).
-- Grid thumbnails refresh from the persisted edit state the next time they re-render; an immediate refresh hook isn't exposed by the v1 API.
+- Grid thumbnails refresh immediately after each photo's commit: core's `commitEdit` regenerates the edited thumbnail, and (since Safelight 2.5.0) carries that photo's own `paramBag`, so a batch edit/reset on photos other than the active one no longer renders their thumbnails with the active photo's extension-stage params.
