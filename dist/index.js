@@ -19,6 +19,7 @@ var GROUPS = [
   { key: "detail", label: "Detail", keys: ["sharpening", "sharpenRadius", "sharpenDetail", "sharpenMasking", "luminanceNR", "luminanceNRDetail", "luminanceNRContrast", "colorNR", "colorNRDetail", "colorNRSmoothness"] },
   { key: "lens", label: "Lens corrections", keys: ["lensCorrection"] },
   { key: "effects", label: "Effects", keys: ["vignette", "grain"] },
+  { key: "displayTransform", label: "Display transform", keys: ["displayTransform"] },
   { key: "geometry", label: "Crop & transform", keys: ["crop", "straighten", "transform"], geo: true },
   { key: "masks", label: "Masks", keys: ["masks"], geo: true },
   { key: "retouch", label: "Heal / clone", keys: ["retouch"], geo: true }

@@ -17,7 +17,7 @@ The core workflow — an **adjustments clipboard**, like Lightroom's Copy/Paste 
 - **Merge** — applies only the checked **scope** groups, leaving everything else on the target untouched.
 - **Replace** — copies the source's entire edit recipe (the scope list is ignored and dims out).
 
-**Scope** — choose which parameter groups Paste and Sync write: basic tone, white balance, tone curve, HSL, color grading, detail, lens corrections, effects, and the geometry-dependent groups crop/transform, masks, and heal/clone (marked `⚠`). Use **All / None / Default** to set quickly. Each target gets its own undoable history entry.
+**Scope** — choose which parameter groups Paste and Sync write: basic tone, white balance, tone curve, HSL, color grading, detail, lens corrections, effects, display transform, and the geometry-dependent groups crop/transform, masks, and heal/clone (marked `⚠`). Use **All / None / Default** to set quickly. Each target gets its own undoable history entry. The Display transform group is on by default, so a Merge sync from a photo that follows the default (no pick of its own) also sets the targets back to following the default — untick the group to keep the targets' own picks.
 
 ## Auto
 
