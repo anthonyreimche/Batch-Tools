@@ -4,6 +4,8 @@
 // Built with esbuild (`npm run build`); JSX compiles to h(...) calls. React
 // comes from api.react at activate time — never bundle your own copy.
 
+import { GROUPS, deepClone, mergeRecipe } from "./recipe.js";
+
 let api = null;
 let React = null;
 let store = null; // shared zustand store (clipboard + scope + mode + run state)
@@ -15,7 +17,6 @@ function h(...args) {
 
 const dev = () => api.stores.useDevelopStore;
 const cat = () => api.stores.useCatalogStore;
-const deepClone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
 
 // A photo's as-shot WB (from EXIF). loadEdit needs it as its second argument:
 // omitting it makes the store assume 6500 K, which (a) skews Auto WB and (b)
@@ -25,23 +26,7 @@ const deepClone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
 const asShotOf = (id) => cat().getState().photos.find((p) => p.id === id)?.exif?.colorTemperature;
 const loadEditFull = (id) => dev().getState().loadEdit(id, asShotOf(id));
 
-// ── Param groups ─────────────────────────────────────────────────────────────
-// `geo` groups depend on pixel geometry; with Geometry safety on they are
-// skipped for targets whose dimensions differ from the source.
-const GROUPS = [
-  { key: "basic",    label: "Basic tone",      keys: ["exposure", "contrast", "highlights", "shadows", "whites", "blacks", "texture", "clarity", "dehaze", "vibrance", "saturation"] },
-  { key: "wb",       label: "White balance",   keys: ["temperature", "tint"] },
-  { key: "curve",    label: "Tone curve",      keys: ["toneCurve"] },
-  { key: "hsl",      label: "HSL",             keys: ["hsl"] },
-  { key: "grading",  label: "Color grading",   keys: ["colorGrading"] },
-  { key: "detail",   label: "Detail",          keys: ["sharpening", "sharpenRadius", "sharpenDetail", "sharpenMasking", "luminanceNR", "luminanceNRDetail", "luminanceNRContrast", "colorNR", "colorNRDetail", "colorNRSmoothness"] },
-  { key: "lens",     label: "Lens corrections", keys: ["lensCorrection"] },
-  { key: "effects",  label: "Effects",         keys: ["vignette", "grain"] },
-  { key: "displayTransform", label: "Display transform", keys: ["displayTransform"] },
-  { key: "geometry", label: "Crop & transform", keys: ["crop", "straighten", "transform"], geo: true },
-  { key: "masks",    label: "Masks",           keys: ["masks"], geo: true },
-  { key: "retouch",  label: "Heal / clone",    keys: ["retouch"], geo: true },
-];
+// Scope checked by default: every group that doesn't depend on pixel geometry.
 const DEFAULT_GROUPS = GROUPS.filter((g) => !g.geo).map((g) => g.key);
 
 // Relative ("speed edit") adjustments, clamped to the app's slider ranges.
@@ -101,29 +86,6 @@ async function forEachTarget(ids, restoreId, fn, onProgress) {
 async function commitParams(params, label) {
   dev().setState({ params });
   await dev().getState().commitEdit(label);
-}
-
-/** Build a target's new params from a source recipe, honouring scope + mode. */
-function mergeRecipe(cur, src, scopeSet, mode, sizeDiffers) {
-  let merged;
-  let geoSkipped = false;
-  if (mode === "replace") {
-    merged = deepClone(src);
-    if (sizeDiffers) {
-      for (const g of GROUPS) {
-        if (g.geo) for (const k of g.keys) merged[k] = deepClone(cur[k]);
-      }
-      geoSkipped = true;
-    }
-  } else {
-    merged = { ...cur };
-    for (const g of GROUPS) {
-      if (!scopeSet.has(g.key)) continue;
-      if (g.geo && sizeDiffers) { geoSkipped = true; continue; }
-      for (const k of g.keys) merged[k] = deepClone(src[k]);
-    }
-  }
-  return { merged, geoSkipped };
 }
 
 /**

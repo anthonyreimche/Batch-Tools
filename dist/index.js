@@ -1,15 +1,5 @@
-// src/index.jsx
-var api = null;
-var React = null;
-var store = null;
-function h(...args) {
-  return React.createElement(...args);
-}
-var dev = () => api.stores.useDevelopStore;
-var cat = () => api.stores.useCatalogStore;
+// src/recipe.js
 var deepClone = (v) => v === void 0 ? v : JSON.parse(JSON.stringify(v));
-var asShotOf = (id) => cat().getState().photos.find((p) => p.id === id)?.exif?.colorTemperature;
-var loadEditFull = (id) => dev().getState().loadEdit(id, asShotOf(id));
 var GROUPS = [
   { key: "basic", label: "Basic tone", keys: ["exposure", "contrast", "highlights", "shadows", "whites", "blacks", "texture", "clarity", "dehaze", "vibrance", "saturation"] },
   { key: "wb", label: "White balance", keys: ["temperature", "tint"] },
@@ -24,6 +14,43 @@ var GROUPS = [
   { key: "masks", label: "Masks", keys: ["masks"], geo: true },
   { key: "retouch", label: "Heal / clone", keys: ["retouch"], geo: true }
 ];
+function mergeRecipe(cur, src, scopeSet, mode, sizeDiffers) {
+  let merged;
+  let geoSkipped = false;
+  if (mode === "replace") {
+    merged = deepClone(src);
+    merged.processVersion = cur.processVersion;
+    if (sizeDiffers) {
+      for (const g of GROUPS) {
+        if (g.geo) for (const k of g.keys) merged[k] = deepClone(cur[k]);
+      }
+      geoSkipped = true;
+    }
+  } else {
+    merged = { ...cur };
+    for (const g of GROUPS) {
+      if (!scopeSet.has(g.key)) continue;
+      if (g.geo && sizeDiffers) {
+        geoSkipped = true;
+        continue;
+      }
+      for (const k of g.keys) merged[k] = deepClone(src[k]);
+    }
+  }
+  return { merged, geoSkipped };
+}
+
+// src/index.jsx
+var api = null;
+var React = null;
+var store = null;
+function h(...args) {
+  return React.createElement(...args);
+}
+var dev = () => api.stores.useDevelopStore;
+var cat = () => api.stores.useCatalogStore;
+var asShotOf = (id) => cat().getState().photos.find((p) => p.id === id)?.exif?.colorTemperature;
+var loadEditFull = (id) => dev().getState().loadEdit(id, asShotOf(id));
 var DEFAULT_GROUPS = GROUPS.filter((g) => !g.geo).map((g) => g.key);
 var REL_PARAMS = [
   { key: "exposure", label: "Exposure (EV)", min: -5, max: 5, step: 0.5, def: 0.5 },
@@ -73,30 +100,6 @@ async function forEachTarget(ids, restoreId, fn, onProgress) {
 async function commitParams(params, label) {
   dev().setState({ params });
   await dev().getState().commitEdit(label);
-}
-function mergeRecipe(cur, src, scopeSet, mode, sizeDiffers) {
-  let merged;
-  let geoSkipped = false;
-  if (mode === "replace") {
-    merged = deepClone(src);
-    if (sizeDiffers) {
-      for (const g of GROUPS) {
-        if (g.geo) for (const k of g.keys) merged[k] = deepClone(cur[k]);
-      }
-      geoSkipped = true;
-    }
-  } else {
-    merged = { ...cur };
-    for (const g of GROUPS) {
-      if (!scopeSet.has(g.key)) continue;
-      if (g.geo && sizeDiffers) {
-        geoSkipped = true;
-        continue;
-      }
-      for (const k of g.keys) merged[k] = deepClone(src[k]);
-    }
-  }
-  return { merged, geoSkipped };
 }
 async function applyRecipe({ src, srcDims, srcId, label, scopeSet, mode }, onProgress) {
   const s = settings();

@@ -15,7 +15,7 @@ The core workflow — an **adjustments clipboard**, like Lightroom's Copy/Paste 
 **Mode** (segmented toggle):
 
 - **Merge** — applies only the checked **scope** groups, leaving everything else on the target untouched.
-- **Replace** — copies the source's entire edit recipe (the scope list is ignored and dims out).
+- **Replace** — copies the source's entire edit recipe, apart from its processing version (the scope list is ignored and dims out).
 
 **Scope** — choose which parameter groups Paste and Sync write: basic tone, white balance, tone curve, HSL, color grading, detail, lens corrections, effects, display transform, and the geometry-dependent groups crop/transform, masks, and heal/clone (marked `⚠`). Use **All / None / Default** to set quickly. Each target gets its own undoable history entry. The Display transform group is on by default, so a Merge sync from a photo that follows the default (no pick of its own) also sets the targets back to following the default — untick the group to keep the targets' own picks.
 
@@ -67,6 +67,7 @@ Extensions panel → enter `owner/safelight-batch-tools` (or the repo URL).
 ```
 npm install
 npm run build   # src/index.jsx → dist/index.js (committed)
+npm test        # the recipe merge in src/recipe.js (Node's built-in test runner)
 ```
 
 React is taken from `api.react` at activate time and is not bundled. UI uses inline styles on Safelight's CSS variables, so it follows every theme and doesn't depend on the app's compiled Tailwind classes.
@@ -75,4 +76,5 @@ React is taken from `api.react` at activate time and is not bundled. UI uses inl
 
 - The clipboard, scope and mode live in a small shared store (`api.stores.create`), so the panel buttons and the global keyboard shortcuts always agree.
 - The engine drives the develop store (`loadEdit → commitEdit`) per photo, so persistence, undo history and cross-window broadcast behave exactly like manual edits. The original develop session is restored when a batch finishes (including after a Copy).
+- Replace copies the source's whole recipe except its processing version. Each target keeps its own, as Safelight's built-in paste does, so syncing never changes how an older photo is processed.
 - Grid thumbnails refresh immediately after each photo's commit: core's `commitEdit` regenerates the edited thumbnail, and (since Safelight 2.5.0) carries that photo's own `paramBag`, so a batch edit/reset on photos other than the active one no longer renders their thumbnails with the active photo's extension-stage params.
