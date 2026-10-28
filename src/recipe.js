@@ -47,3 +47,24 @@ export function mergeRecipe(cur, src, scopeSet, mode, sizeDiffers) {
   }
   return { merged, geoSkipped };
 }
+
+/** The bag keys of the settings the transform a photo renders with keeps
+ *  (api.pipelines.paramKeys). A photo with no pick renders with the default, so
+ *  `effectiveId(null)` names it. A core that predates paramKeys lists none. */
+export function transformKeys(pipelines, displayTransform) {
+  if (!pipelines || typeof pipelines.paramKeys !== "function") return [];
+  return pipelines.paramKeys(pipelines.effectiveId(displayTransform ?? null));
+}
+
+/** The source bag's entries for its display transform's settings, which the
+ *  Display transform group carries with the pick. `keys` comes from
+ *  transformKeys; an older core lists none and nothing is carried. Every key
+ *  is carried: one the source holds no value for as undefined, which the core
+ *  reads as the param's default, so no target keeps a tuned value of its own. */
+export function transformBagPatch(srcBag, scopeSet, mode, keys) {
+  if (!keys || keys.length === 0) return {};
+  if (mode !== "replace" && !scopeSet.has("displayTransform")) return {};
+  const out = {};
+  for (const k of keys) out[k] = deepClone(srcBag?.[k]);
+  return out;
+}

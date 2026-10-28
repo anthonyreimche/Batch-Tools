@@ -4,7 +4,7 @@
 // Built with esbuild (`npm run build`); JSX compiles to h(...) calls. React
 // comes from api.react at activate time — never bundle your own copy.
 
-import { GROUPS, deepClone, mergeRecipe } from "./recipe.js";
+import { GROUPS, deepClone, mergeRecipe, transformBagPatch, transformKeys } from "./recipe.js";
 
 let api = null;
 let React = null;
@@ -83,8 +83,10 @@ async function forEachTarget(ids, restoreId, fn, onProgress) {
   return errors;
 }
 
-async function commitParams(params, label) {
+// `bagPatch` merges over the loaded target's bag, so its other entries survive.
+async function commitParams(params, label, bagPatch) {
   dev().setState({ params });
+  if (bagPatch && Object.keys(bagPatch).length) dev().getState().setDynParams(bagPatch);
   await dev().getState().commitEdit(label);
 }
 
@@ -92,8 +94,9 @@ async function commitParams(params, label) {
  * Apply a source recipe to the selected photos.
  * `srcId` is excluded from the targets when present (Sync excludes its source;
  * Paste passes null so every selected photo receives the clipboard).
+ * `srcBag` + `srcKeys` carry the Display transform's settings with its pick.
  */
-async function applyRecipe({ src, srcDims, srcId, label, scopeSet, mode }, onProgress) {
+async function applyRecipe({ src, srcBag, srcKeys, srcDims, srcId, label, scopeSet, mode }, onProgress) {
   const s = settings();
   const c = cat().getState();
   const byId = new Map(c.photos.map((p) => [p.id, p]));
@@ -111,7 +114,8 @@ async function applyRecipe({ src, srcDims, srcId, label, scopeSet, mode }, onPro
       (photo.width !== srcDims.width || photo.height !== srcDims.height);
     const { merged, geoSkipped: gs } = mergeRecipe(cur, src, scopeSet, mode, sizeDiffers);
     if (gs) geoSkipped++;
-    await commitParams(merged, label);
+    const bagPatch = transformBagPatch(srcBag, scopeSet, mode, srcKeys);
+    await commitParams(merged, label, bagPatch);
   }, onProgress);
 
   return { done: ids.length - errors.length, total: ids.length, geoSkipped, errors: errors.length };
@@ -124,8 +128,10 @@ async function runSync(scopeSet, mode, onProgress) {
   if (!sourceId) return { error: "No active photo to copy from." };
   if (dev().getState().photoId !== sourceId) await loadEditFull(sourceId);
   const src = deepClone(dev().getState().params);
+  const srcBag = deepClone(dev().getState().paramBag);
+  const srcKeys = transformKeys(api.pipelines, src.displayTransform);
   const srcPhoto = c.photos.find((p) => p.id === sourceId);
-  return applyRecipe({ src, srcDims: srcPhoto, srcId: sourceId, label: settings().historyLabel, scopeSet, mode }, onProgress);
+  return applyRecipe({ src, srcBag, srcKeys, srcDims: srcPhoto, srcId: sourceId, label: settings().historyLabel, scopeSet, mode }, onProgress);
 }
 
 /** Paste: apply the stored clipboard recipe to every selected photo. */
@@ -133,7 +139,10 @@ async function runPaste(clipboard, scopeSet, mode, onProgress) {
   if (!clipboard) return { error: "Clipboard is empty — copy settings first." };
   const srcDims = clipboard.width && clipboard.height
     ? { width: clipboard.width, height: clipboard.height } : null;
-  return applyRecipe({ src: clipboard.params, srcDims, srcId: null, label: `${settings().historyLabel} (paste)`, scopeSet, mode }, onProgress);
+  return applyRecipe({
+    src: clipboard.params, srcBag: clipboard.paramBag, srcKeys: clipboard.transformKeys, srcDims, srcId: null,
+    label: `${settings().historyLabel} (paste)`, scopeSet, mode,
+  }, onProgress);
 }
 
 /** Add a clamped delta to one param on every selected photo. */
@@ -368,7 +377,7 @@ function makeStore() {
   const initialScope = new Set(Array.isArray(savedGroups) ? savedGroups : DEFAULT_GROUPS);
 
   return api.stores.create((set, get) => ({
-    clipboard: null, // { params, sourceName, width, height }
+    clipboard: null, // { params, paramBag, transformKeys, sourceName, width, height }
     scope: initialScope,
     mode: s.syncMode === "replace" ? "replace" : "merge",
     busy: false,
@@ -396,17 +405,22 @@ function makeStore() {
       const photo = c.photos.find((p) => p.id === sourceId);
       const d = dev();
       const prevId = d.getState().photoId;
-      let params;
+      let params, paramBag;
       if (prevId !== sourceId) {
         await loadEditFull(sourceId);
         params = deepClone(d.getState().params);
+        paramBag = deepClone(d.getState().paramBag);
         if (prevId) await loadEditFull(prevId); // restore session
       } else {
         params = deepClone(d.getState().params);
+        paramBag = deepClone(d.getState().paramBag);
       }
       const name = photo ? photo.filename : "photo";
       set({
-        clipboard: { params, sourceName: name, width: photo?.width, height: photo?.height },
+        clipboard: {
+          params, paramBag, transformKeys: transformKeys(api.pipelines, params.displayTransform),
+          sourceName: name, width: photo?.width, height: photo?.height,
+        },
         status: `Copied settings from ${name}.`,
       });
     },
