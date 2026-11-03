@@ -5,6 +5,8 @@
 // comes from api.react at activate time — never bundle your own copy.
 
 import { GROUPS, deepClone, mergeRecipe, transformBagPatch, transformKeys } from "./recipe.js";
+import { confirmApply, confirmAuto, confirmReset } from "./confirm.js";
+import { REL_BY_KEY, REL_PARAMS, nudge, runTargets, settleAuto, summary } from "./batch.js";
 
 let api = null;
 let React = null;
@@ -29,21 +31,6 @@ const loadEditFull = (id) => dev().getState().loadEdit(id, asShotOf(id));
 // Scope checked by default: every group that doesn't depend on pixel geometry.
 const DEFAULT_GROUPS = GROUPS.filter((g) => !g.geo).map((g) => g.key);
 
-// Relative ("speed edit") adjustments, clamped to the app's slider ranges.
-const REL_PARAMS = [
-  { key: "exposure",    label: "Exposure (EV)", min: -5, max: 5, step: 0.5, def: 0.5 },
-  { key: "contrast",    label: "Contrast",      min: -100, max: 100, step: 5, def: 5 },
-  { key: "highlights",  label: "Highlights",    min: -100, max: 100, step: 5, def: 5 },
-  { key: "shadows",     label: "Shadows",       min: -100, max: 100, step: 5, def: 5 },
-  { key: "whites",      label: "Whites",        min: -100, max: 100, step: 5, def: 5 },
-  { key: "blacks",      label: "Blacks",        min: -100, max: 100, step: 5, def: 5 },
-  { key: "vibrance",    label: "Vibrance",      min: -100, max: 100, step: 5, def: 5 },
-  { key: "saturation",  label: "Saturation",    min: -100, max: 100, step: 5, def: 5 },
-  { key: "temperature", label: "Temperature",   min: -100, max: 100, step: 5, def: 5 },
-  { key: "tint",        label: "Tint",          min: -100, max: 100, step: 5, def: 5 },
-];
-const REL_BY_KEY = new Map(REL_PARAMS.map((p) => [p.key, p]));
-
 // ── Settings (configured via ⚙ in the Extensions panel) ─────────────────────
 function settings() {
   const g = (k, f) => api.settings.get(k, f);
@@ -61,26 +48,17 @@ function settings() {
 // Visits each target through the develop store (loadEdit → mutate →
 // commitEdit), so every photo gets a proper, individually undoable history
 // entry and persistence for free. Restores the original session afterwards.
-async function forEachTarget(ids, restoreId, fn, onProgress) {
+async function forEachTarget(ids, restoreId, fn, { onProgress, signal }) {
   const d = dev();
-  let done = 0;
-  const errors = [];
+  const nameOf = (id) => cat().getState().photos.find((p) => p.id === id)?.filename ?? id;
   try {
-    for (const id of ids) {
-      try {
-        await loadEditFull(id);
-        await fn(id, d.getState().params);
-      } catch {
-        errors.push(id);
-      }
-      done++;
-      if (onProgress) onProgress(done, ids.length);
-      await new Promise((r) => setTimeout(r, 0)); // keep the UI responsive
-    }
+    return await runTargets(ids, async (id) => {
+      await loadEditFull(id);
+      await fn(id, d.getState().params);
+    }, { nameOf, signal, onProgress });
   } finally {
     if (restoreId) await loadEditFull(restoreId);
   }
-  return errors;
 }
 
 // `bagPatch` merges over the loaded target's bag, so its other entries survive.
@@ -96,7 +74,7 @@ async function commitParams(params, label, bagPatch) {
  * Paste passes null so every selected photo receives the clipboard).
  * `srcBag` + `srcKeys` carry the Display transform's settings with its pick.
  */
-async function applyRecipe({ src, srcBag, srcKeys, srcDims, srcId, label, scopeSet, mode }, onProgress) {
+async function applyRecipe({ src, srcBag, srcKeys, srcDims, srcId, label, scopeSet, mode }, run) {
   const s = settings();
   const c = cat().getState();
   const byId = new Map(c.photos.map((p) => [p.id, p]));
@@ -104,11 +82,11 @@ async function applyRecipe({ src, srcBag, srcKeys, srcDims, srcId, label, scopeS
   if (!ids.length) return { error: srcId ? "Select at least one other photo." : "No photos selected." };
   if (mode === "merge" && !scopeSet.size) return { error: "No groups checked." };
   if (s.confirmAbove > 0 && ids.length > s.confirmAbove &&
-      !window.confirm(`Apply settings to ${ids.length} photos?`)) return null;
+      !(await confirmApply(api.ui, ids.length))) return null;
 
   let geoSkipped = 0;
   const restoreId = c.activePhotoId || dev().getState().photoId;
-  const errors = await forEachTarget(ids, restoreId, async (id, cur) => {
+  const res = await forEachTarget(ids, restoreId, async (id, cur) => {
     const photo = byId.get(id);
     const sizeDiffers = s.geometrySafety && srcDims && photo &&
       (photo.width !== srcDims.width || photo.height !== srcDims.height);
@@ -116,13 +94,13 @@ async function applyRecipe({ src, srcBag, srcKeys, srcDims, srcId, label, scopeS
     if (gs) geoSkipped++;
     const bagPatch = transformBagPatch(srcBag, scopeSet, mode, srcKeys);
     await commitParams(merged, label, bagPatch);
-  }, onProgress);
+  }, run);
 
-  return { done: ids.length - errors.length, total: ids.length, geoSkipped, errors: errors.length };
+  return { ...res, geoSkipped };
 }
 
 /** Sync: copy the active photo's live settings to the other selected photos. */
-async function runSync(scopeSet, mode, onProgress) {
+async function runSync(scopeSet, mode, run) {
   const c = cat().getState();
   const sourceId = c.activePhotoId;
   if (!sourceId) return { error: "No active photo to copy from." };
@@ -131,22 +109,22 @@ async function runSync(scopeSet, mode, onProgress) {
   const srcBag = deepClone(dev().getState().paramBag);
   const srcKeys = transformKeys(api.pipelines, src.displayTransform);
   const srcPhoto = c.photos.find((p) => p.id === sourceId);
-  return applyRecipe({ src, srcBag, srcKeys, srcDims: srcPhoto, srcId: sourceId, label: settings().historyLabel, scopeSet, mode }, onProgress);
+  return applyRecipe({ src, srcBag, srcKeys, srcDims: srcPhoto, srcId: sourceId, label: settings().historyLabel, scopeSet, mode }, run);
 }
 
 /** Paste: apply the stored clipboard recipe to every selected photo. */
-async function runPaste(clipboard, scopeSet, mode, onProgress) {
+async function runPaste(clipboard, scopeSet, mode, run) {
   if (!clipboard) return { error: "Clipboard is empty — copy settings first." };
   const srcDims = clipboard.width && clipboard.height
     ? { width: clipboard.width, height: clipboard.height } : null;
   return applyRecipe({
     src: clipboard.params, srcBag: clipboard.paramBag, srcKeys: clipboard.transformKeys, srcDims, srcId: null,
     label: `${settings().historyLabel} (paste)`, scopeSet, mode,
-  }, onProgress);
+  }, run);
 }
 
 /** Add a clamped delta to one param on every selected photo. */
-async function runRelative(paramKey, delta, onProgress) {
+async function runRelative(paramKey, delta, run) {
   const c = cat().getState();
   const ids = [...c.selectedIds];
   if (!ids.length) return { error: "No photos selected." };
@@ -155,26 +133,23 @@ async function runRelative(paramKey, delta, onProgress) {
   const label = `${def.label} ${delta > 0 ? "+" : ""}${delta}`;
   const restoreId = c.activePhotoId || dev().getState().photoId;
 
-  const errors = await forEachTarget(ids, restoreId, async (id, cur) => {
-    const v = Math.min(def.max, Math.max(def.min, (cur[paramKey] ?? 0) + delta));
+  return forEachTarget(ids, restoreId, async (id, cur) => {
+    const v = nudge(def, cur[paramKey], delta);
     if (v === cur[paramKey]) return;
     await commitParams({ ...cur, [paramKey]: v }, label);
-  }, onProgress);
-
-  return { done: ids.length - errors.length, total: ids.length, errors: errors.length };
+  }, run);
 }
 
 /** Reset every selected photo to its original state (undoable per photo). */
-async function runReset(onProgress) {
+async function runReset(run) {
   const c = cat().getState();
   const ids = [...c.selectedIds];
   if (!ids.length) return { error: "No photos selected." };
-  if (!window.confirm(`Reset edits on ${ids.length} photo${ids.length > 1 ? "s" : ""}?`)) return null;
+  if (!(await confirmReset(api.ui, ids.length))) return null;
   const restoreId = c.activePhotoId || dev().getState().photoId;
-  const errors = await forEachTarget(ids, restoreId, async () => {
+  return forEachTarget(ids, restoreId, async () => {
     await dev().getState().reset();
-  }, onProgress);
-  return { done: ids.length - errors.length, total: ids.length, errors: errors.length };
+  }, run);
 }
 
 // ── Auto tone / white balance ────────────────────────────────────────────────
@@ -317,7 +292,7 @@ function histFromBitmap(bmp) {
 }
 
 /** Auto-correct tone and/or white balance on every selected photo. */
-async function runAuto({ tone, wb }, onProgress) {
+async function runAuto({ tone, wb }, run) {
   // renderPhotoFrame renders a SPECIFIC photo headlessly; captureFrame only
   // renders the live Develop source, so it measured the wrong image for every
   // photo but the open one. Require the newer API rather than silently misbehave.
@@ -329,41 +304,34 @@ async function runAuto({ tone, wb }, onProgress) {
   const ids = [...c.selectedIds];
   if (!ids.length) return { error: "No photos selected." };
   if (s.confirmAbove > 0 && ids.length > s.confirmAbove &&
-      !window.confirm(`Auto-correct ${ids.length} photos? Each is rendered a few times — this may take a moment.`)) return null;
+      !(await confirmAuto(api.ui, ids.length))) return null;
 
   const label = tone && wb ? "Auto Tone + WB" : tone ? "Auto Tone" : "Auto White Balance";
   const cap = tone && wb ? 10 : 8;
   const restoreId = c.activePhotoId || dev().getState().photoId;
 
-  const errors = await forEachTarget(ids, restoreId, async (id, cur) => {
+  return forEachTarget(ids, restoreId, async (id, cur) => {
     const asShot = dev().getState().asShotTemperature ?? 6500;
     // The photo's committed extension-stage params — passed to renderPhotoFrame
     // so the measured frame matches what committing the trial params would render
     // (stages that tint/tone the image are included), not the active photo's bag.
     const bag = deepClone(dev().getState().paramBag) || {};
-    let p = { ...cur };
-    let toneDone = !tone, wbDone = !wb;
-    for (let i = 0; i < cap && !(toneDone && wbDone); i++) {
-      const bmp = await api.develop.renderPhotoFrame(id, p, bag);
-      if (!bmp) break;
-      const hist = histFromBitmap(bmp);
-      if (bmp && typeof bmp.close === "function") bmp.close();
-      if (!hist) break;
-      if (tone && !toneDone) {
-        const st = autoToneStep(hist, p);
-        p = { ...p, exposure: st.exposure, contrast: st.contrast, highlights: st.highlights, shadows: st.shadows, whites: st.whites, blacks: st.blacks };
-        toneDone = st.done;
-      }
-      if (wb && !wbDone) {
-        const st = autoWhiteBalanceStep(hist, p, asShot);
-        p = { ...p, temperature: st.temperature, tint: st.tint };
-        wbDone = st.done;
-      }
-    }
-    await commitParams(p, label);
-  }, onProgress);
-
-  return { done: ids.length - errors.length, total: ids.length, errors: errors.length };
+    const steps = [];
+    if (tone) steps.push(autoToneStep);
+    if (wb) steps.push((hist, p) => autoWhiteBalanceStep(hist, p, asShot));
+    const p = await settleAuto(cur, {
+      cap,
+      steps,
+      measure: async (trial) => {
+        const bmp = await api.develop.renderPhotoFrame(id, trial, bag);
+        if (!bmp) return null;
+        const hist = histFromBitmap(bmp);
+        if (typeof bmp.close === "function") bmp.close();
+        return hist;
+      },
+    });
+    if (Object.keys(p).some((k) => p[k] !== cur[k])) await commitParams(p, label);
+  }, run);
 }
 
 // ── Shared store ─────────────────────────────────────────────────────────────
@@ -383,6 +351,8 @@ function makeStore() {
     busy: false,
     progress: null,
     status: "",
+    failures: [], // { filename, reason } from the last run
+    abort: null, // the running job's AbortController
 
     setScope(next) {
       set({ scope: next });
@@ -427,31 +397,28 @@ function makeStore() {
 
     async _run(job) {
       if (get().busy) return;
-      set({ busy: true, status: "", progress: null });
+      const abort = new AbortController();
+      set({ busy: true, status: "", failures: [], progress: null, abort });
       try {
-        const res = await job((done, total) => set({ progress: { done, total } }));
+        const res = await job({ onProgress: (done, total) => set({ progress: { done, total } }), signal: abort.signal });
         if (res == null) set({ status: "Cancelled." });
         else if (res.error) set({ status: res.error });
-        else {
-          let msg = `Done: ${res.done}/${res.total}.`;
-          if (res.geoSkipped) msg += ` Geometry skipped on ${res.geoSkipped} (size differs).`;
-          if (res.errors) msg += ` ${res.errors} failed.`;
-          set({ status: msg });
-        }
+        else set({ status: summary(res), failures: res.failures });
       } catch (e) {
         set({ status: "Error: " + (e && e.message ? e.message : String(e)) });
       } finally {
-        set({ busy: false, progress: null });
+        set({ busy: false, progress: null, abort: null });
       }
     },
+    cancel() { get().abort?.abort(); },
 
-    paste() { return get()._run((p) => runPaste(get().clipboard, get().scope, get().mode, p)); },
-    sync()  { return get()._run((p) => runSync(get().scope, get().mode, p)); },
-    relative(key, delta) { return get()._run((p) => runRelative(key, delta, p)); },
+    paste() { return get()._run((r) => runPaste(get().clipboard, get().scope, get().mode, r)); },
+    sync()  { return get()._run((r) => runSync(get().scope, get().mode, r)); },
+    relative(key, delta) { return get()._run((r) => runRelative(key, delta, r)); },
     reset() { return get()._run(runReset); },
-    autoTone() { return get()._run((p) => runAuto({ tone: true, wb: false }, p)); },
-    autoWB()   { return get()._run((p) => runAuto({ tone: false, wb: true }, p)); },
-    autoBoth() { return get()._run((p) => runAuto({ tone: true, wb: true }, p)); },
+    autoTone() { return get()._run((r) => runAuto({ tone: true, wb: false }, r)); },
+    autoWB()   { return get()._run((r) => runAuto({ tone: false, wb: true }, r)); },
+    autoBoth() { return get()._run((r) => runAuto({ tone: true, wb: true }, r)); },
   }));
 }
 
@@ -473,6 +440,8 @@ const S = {
   grid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 8px" },
   check: { display: "flex", alignItems: "center", gap: "5px", cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden" },
   status: { color: "var(--color-text-secondary)", minHeight: "13px" },
+  failures: { display: "flex", flexDirection: "column", gap: "2px", maxHeight: "96px", overflowY: "auto", color: "var(--color-text-secondary)" },
+  failure: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
 };
 
 function Section({ id, title, openByDefault, open, onToggle, right, children }) {
@@ -504,6 +473,7 @@ function BatchPanel() {
   const busy = store((s) => s.busy);
   const progress = store((s) => s.progress);
   const status = store((s) => s.status);
+  const failures = store((s) => s.failures);
   const st = store.getState();
 
   // Re-render when extension settings change (any window).
@@ -628,8 +598,20 @@ function BatchPanel() {
         </ui.Button>
       </Section>
 
-      {busy && progress && <ui.ProgressBar value={pct / 100} />}
+      {busy && progress && (
+        <ui.Row gap={6}>
+          <div style={{ flex: 1 }}><ui.ProgressBar value={pct / 100} /></div>
+          <ui.Button variant="ghost" size="sm" onClick={() => st.cancel()} title="Stop after the photo in progress">Cancel</ui.Button>
+        </ui.Row>
+      )}
       <div style={S.status}>{status}</div>
+      {failures.length > 0 && (
+        <div style={S.failures}>
+          {failures.map((f, i) => (
+            <span key={i} style={S.failure} title={`${f.filename}: ${f.reason}`}>{f.filename}: {f.reason}</span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

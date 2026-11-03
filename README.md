@@ -2,7 +2,7 @@
 
 Batch editing panel for [Safelight](https://github.com/anthonyreimche/SafeLight). Adds a **Batch** panel (Library module, right rail; also available from the View menu in Develop) modelled on the copy/paste-clipboard workflow photographers know from Lightroom Classic and Capture One.
 
-The panel is organised into three collapsible sections.
+The panel is organized into collapsible sections. While a batch runs, **Cancel** next to the progress bar stops it after the photo in progress. When photos fail, the panel lists each one by filename with the reason.
 
 ## Copy / Paste & Sync
 
@@ -17,21 +17,21 @@ The core workflow — an **adjustments clipboard**, like Lightroom's Copy/Paste 
 - **Merge** — applies only the checked **scope** groups, leaving everything else on the target untouched.
 - **Replace** — copies the source's entire edit recipe, apart from its processing version (the scope list is ignored and dims out).
 
-**Scope** — choose which parameter groups Paste and Sync write: basic tone, white balance, tone curve, HSL, color grading, detail, lens corrections, effects, display transform, and the geometry-dependent groups crop/transform, masks, and heal/clone (marked `⚠`). Use **All / None / Default** to set quickly. Each target gets its own undoable history entry. The Display transform group is on by default, so a Merge sync from a photo that follows the default (no pick of its own) also sets the targets back to following the default — untick the group to keep the targets' own picks. The group also carries every setting of the transform the source renders with (its pick, or the default when it has none), so a target that gets the pick gets the source's values for all of them: a setting the source never changed goes back to its default on the target, even one the target had tuned. A target's other extension settings are left as they are. This needs a Safelight that lists transform settings (`api.pipelines.paramKeys`); older builds carry the pick alone.
+**Scope** — choose which parameter groups Paste and Sync write: basic tone, white balance, tone curve, HSL, colour grading, detail, lens corrections, effects, display transform, and the geometry-dependent groups crop/transform, masks, and heal/clone (marked `⚠`). Use **All / None / Default** to set quickly. Each target gets its own undoable history entry. The Display transform group is on by default, so a Merge sync from a photo that follows the default (no pick of its own) also sets the targets back to following the default — untick the group to keep the targets' own picks. The group also carries every setting of the transform the source renders with (its pick, or the default when it has none), so a target that gets the pick gets the source's values for all of them: a setting the source never changed goes back to its default on the target, even one the target had tuned. A target's other extension settings are left as they are. This needs a Safelight that lists transform settings (`api.pipelines.paramKeys`); older builds carry the pick alone.
 
 ## Auto
 
 Batch versions of the per-photo **Auto Tone** and **Auto White Balance** found in the Develop Basic/White Balance panels — applied across the whole selection:
 
 - **Auto Tone** — sets exposure, highlights, shadows, whites and blacks for a full, unclipped tonal range (contrast is left alone).
-- **Auto WB** — gray-world white balance: sets temperature and tint.
+- **Auto WB** — grey-world white balance: sets temperature and tint.
 - **Auto Tone + WB** — both in one pass.
 
-Each photo is analysed by rendering it headlessly with `api.develop.renderPhotoFrame(photoId, params, paramBag)` — which renders that specific photo through the full pipeline (carrying its own extension-stage params), unlike `captureFrame`, which only renders the live Develop source — building a histogram, and running the same convergence loop the core Auto buttons use (re-render → re-measure, a few passes), then committing one undoable history entry. The same algorithm as the core `auto-adjust` is used, so batch results match the per-photo buttons. Large selections honour the "Confirm when applying to more than" threshold, since each photo is rendered several times.
+Each photo is analyzed by rendering it headlessly with `api.develop.renderPhotoFrame(photoId, params, paramBag)` — which renders that specific photo through the full pipeline (carrying its own extension-stage params), unlike `captureFrame`, which only renders the live Develop source — building a histogram, and running the same convergence loop the core Auto buttons use (re-render → re-measure, a few passes), then committing one undoable history entry (none when nothing changes). A photo that can't be rendered is reported as failed and left as it was. The same algorithm as the core `auto-adjust` is used, so batch results match the per-photo buttons. Large selections honour the "Confirm when applying to more than" threshold, since each photo is rendered several times.
 
 ## Speed Edit
 
-Capture One-style batch nudge: pick a parameter (exposure, contrast, temperature, …), set an amount, and press **−** / **+** to add or subtract that amount on every selected photo, clamped to valid ranges. Existing edits are preserved, and the value is only applied when you press a button (not while you type).
+Capture One-style batch nudge: pick a parameter (exposure, contrast, temperature, …), set an amount, and press **−** / **+** to add or subtract that amount on every selected photo, clamped to the sliders' ranges (temperature moves in Kelvin, 2000–50000 K; tint ±150). Existing edits are preserved, and the value is only applied when you press a button (not while you type).
 
 ## Reset
 
@@ -67,7 +67,7 @@ Extensions panel → enter `owner/safelight-batch-tools` (or the repo URL).
 ```
 npm install
 npm run build   # src/index.jsx → dist/index.js (committed)
-npm test        # the recipe merge in src/recipe.js (Node's built-in test runner)
+npm test        # src/recipe.js and src/batch.js (Node's built-in test runner)
 ```
 
 React is taken from `api.react` at activate time and is not bundled. UI uses inline styles on Safelight's CSS variables, so it follows every theme and doesn't depend on the app's compiled Tailwind classes.

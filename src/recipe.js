@@ -8,19 +8,24 @@ export const deepClone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify
 // `geo` groups depend on pixel geometry; with Geometry safety on they are
 // skipped for targets whose dimensions differ from the source.
 export const GROUPS = [
-  { key: "basic",    label: "Basic tone",      keys: ["exposure", "contrast", "highlights", "shadows", "whites", "blacks", "texture", "clarity", "dehaze", "vibrance", "saturation"] },
+  { key: "basic",    label: "Basic tone",      keys: ["exposure", "contrast", "highlights", "highlightDetail", "shadows", "shadowDetail", "whites", "blacks", "texture", "clarity", "dehaze", "vibrance", "saturation"] },
   { key: "wb",       label: "White balance",   keys: ["temperature", "tint"] },
   { key: "curve",    label: "Tone curve",      keys: ["toneCurve"] },
   { key: "hsl",      label: "HSL",             keys: ["hsl"] },
-  { key: "grading",  label: "Color grading",   keys: ["colorGrading"] },
-  { key: "detail",   label: "Detail",          keys: ["sharpening", "sharpenRadius", "sharpenDetail", "sharpenMasking", "luminanceNR", "luminanceNRDetail", "luminanceNRContrast", "colorNR", "colorNRDetail", "colorNRSmoothness"] },
+  { key: "grading",  label: "Colour grading",  keys: ["colorGrading"] },
+  { key: "detail",   label: "Detail",          keys: ["sharpening", "sharpenRadius", "sharpenDetail", "sharpenMasking", "luminanceNR", "luminanceNRDetail", "luminanceNRContrast", "luminanceNRShadows", "luminanceNRHighlights", "colorNR", "colorNRDetail", "colorNRSmoothness"] },
   { key: "lens",     label: "Lens corrections", keys: ["lensCorrection"] },
   { key: "effects",  label: "Effects",         keys: ["vignette", "grain"] },
   { key: "displayTransform", label: "Display transform", keys: ["displayTransform"] },
-  { key: "geometry", label: "Crop & transform", keys: ["crop", "straighten", "transform"], geo: true },
+  { key: "geometry", label: "Crop & transform", keys: ["crop", "straighten", "transform", "uprightMode", "guidedLines"], geo: true },
   { key: "masks",    label: "Masks",           keys: ["masks"], geo: true },
   { key: "retouch",  label: "Heal / clone",    keys: ["retouch"], geo: true },
 ];
+
+// Develop params no group copies, each with the reason.
+export const UNGROUPED = {
+  processVersion: "Each photo keeps its own processing version, as the core's paste does; copying it would change how an older photo renders.",
+};
 
 /** Build a target's new params from a source recipe, honouring scope + mode. */
 export function mergeRecipe(cur, src, scopeSet, mode, sizeDiffers) {

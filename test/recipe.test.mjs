@@ -1,8 +1,57 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GROUPS, mergeRecipe, transformBagPatch, transformKeys } from "../src/recipe.js";
+import { existsSync, readFileSync } from "node:fs";
+import { GROUPS, UNGROUPED, mergeRecipe, transformBagPatch, transformKeys } from "../src/recipe.js";
 
 const ALL_GROUPS = new Set(GROUPS.map((g) => g.key));
+
+// The core's DevelopParams keys (src/catalog/develop-params.ts). Extensions
+// can't read the core's defaults at runtime, so the list lives here; the next
+// test keeps it honest whenever the core checkout sits beside this repo.
+const DEVELOP_PARAM_KEYS = [
+  "exposure", "contrast", "highlights", "shadows", "highlightDetail", "shadowDetail", "whites", "blacks",
+  "texture", "clarity", "dehaze",
+  "sharpening", "sharpenRadius", "sharpenDetail", "sharpenMasking",
+  "luminanceNR", "luminanceNRDetail", "luminanceNRContrast", "luminanceNRShadows", "luminanceNRHighlights",
+  "colorNR", "colorNRDetail", "colorNRSmoothness",
+  "vibrance", "saturation", "temperature", "tint",
+  "straighten", "crop", "transform", "uprightMode", "guidedLines",
+  "toneCurve", "hsl", "colorGrading", "vignette", "grain", "masks", "retouch",
+  "displayTransform", "processVersion",
+];
+
+const CORE_DEVELOP_PARAMS = new URL("../../../SafeLight/src/catalog/develop-params.ts", import.meta.url);
+
+test("the develop param list matches the core's DevelopParams", { skip: !existsSync(CORE_DEVELOP_PARAMS) && "no core checkout beside this repo" }, () => {
+  const source = readFileSync(CORE_DEVELOP_PARAMS, "utf8");
+  const body = source.slice(source.indexOf("export interface DevelopParams {")).split(/\r?\n\}/)[0];
+  const coreKeys = [...body.matchAll(/^ {2}(\w+)\??:/gm)].map((m) => m[1]);
+  assert.deepEqual([...coreKeys].sort(), [...DEVELOP_PARAM_KEYS].sort());
+});
+
+test("every develop param is in a group or excluded with a reason", () => {
+  const grouped = new Set(GROUPS.flatMap((g) => g.keys));
+  const missing = DEVELOP_PARAM_KEYS.filter((k) => !grouped.has(k) && !UNGROUPED[k]);
+  assert.deepEqual(missing, []);
+  for (const k of Object.keys(UNGROUPED)) assert.ok(!grouped.has(k), `${k} is both grouped and excluded`);
+});
+
+test("merge copies the highlight/shadow detail and the luminance NR tonal weights", () => {
+  const src = { highlightDetail: 20, shadowDetail: -15, luminanceNRShadows: 40, luminanceNRHighlights: 30 };
+  const cur = { highlightDetail: 0, shadowDetail: 0, luminanceNRShadows: 0, luminanceNRHighlights: 0 };
+  const { merged } = mergeRecipe(cur, src, new Set(["basic", "detail"]), "merge", false);
+  for (const k of Object.keys(src)) assert.equal(merged[k], src[k], k);
+});
+
+test("merge treats upright mode and guided lines as geometry", () => {
+  const src = { uprightMode: "guided", guidedLines: [{ id: "g1" }] };
+  const cur = { uprightMode: "off", guidedLines: [] };
+  const synced = mergeRecipe(cur, src, new Set(["geometry"]), "merge", false).merged;
+  for (const k of Object.keys(src)) assert.deepEqual(synced[k], src[k], k);
+  const { merged, geoSkipped } = mergeRecipe(cur, src, new Set(["geometry"]), "merge", true);
+  assert.equal(geoSkipped, true);
+  assert.deepEqual(merged, cur);
+});
 
 // Just enough of a develop edit to tell two photos apart: a tone value, every
 // geometry-group key, and the processing version (omitted when undefined, like
