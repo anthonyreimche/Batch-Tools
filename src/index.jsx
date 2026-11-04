@@ -622,7 +622,7 @@ export function activate(_api) {
   React = api.react;
   store = makeStore();
 
-  // Keep the visible mode in sync if syncMode is changed from the settings dialog.
+  // Keep the visible mode in sync if syncMode is changed from the settings dialogue.
   api.settings.onChange((key, value) => {
     if (key === "syncMode" && store.getState().mode !== value) {
       store.setState({ mode: value === "replace" ? "replace" : "merge" });

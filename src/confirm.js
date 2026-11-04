@@ -1,5 +1,5 @@
 // The confirmations Batch Tools asks for, worded in one place. They go through
-// the app's own dialog (`api.ui.confirmDialog`): a native window.confirm can
+// the app's own dialogue (`api.ui.confirmDialog`): a native window.confirm can
 // leave Electron unaware the window has focus again and freeze all input.
 
 const photos = (n) => `${n} photo${n === 1 ? "" : "s"}`;

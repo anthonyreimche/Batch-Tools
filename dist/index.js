@@ -1,16 +1,16 @@
 // src/recipe.js
 var deepClone = (v) => v === void 0 ? v : JSON.parse(JSON.stringify(v));
 var GROUPS = [
-  { key: "basic", label: "Basic tone", keys: ["exposure", "contrast", "highlights", "shadows", "whites", "blacks", "texture", "clarity", "dehaze", "vibrance", "saturation"] },
+  { key: "basic", label: "Basic tone", keys: ["exposure", "contrast", "highlights", "highlightDetail", "shadows", "shadowDetail", "whites", "blacks", "texture", "clarity", "dehaze", "vibrance", "saturation"] },
   { key: "wb", label: "White balance", keys: ["temperature", "tint"] },
   { key: "curve", label: "Tone curve", keys: ["toneCurve"] },
   { key: "hsl", label: "HSL", keys: ["hsl"] },
-  { key: "grading", label: "Color grading", keys: ["colorGrading"] },
-  { key: "detail", label: "Detail", keys: ["sharpening", "sharpenRadius", "sharpenDetail", "sharpenMasking", "luminanceNR", "luminanceNRDetail", "luminanceNRContrast", "colorNR", "colorNRDetail", "colorNRSmoothness"] },
+  { key: "grading", label: "Colour grading", keys: ["colorGrading"] },
+  { key: "detail", label: "Detail", keys: ["sharpening", "sharpenRadius", "sharpenDetail", "sharpenMasking", "luminanceNR", "luminanceNRDetail", "luminanceNRContrast", "luminanceNRShadows", "luminanceNRHighlights", "colorNR", "colorNRDetail", "colorNRSmoothness"] },
   { key: "lens", label: "Lens corrections", keys: ["lensCorrection"] },
   { key: "effects", label: "Effects", keys: ["vignette", "grain"] },
   { key: "displayTransform", label: "Display transform", keys: ["displayTransform"] },
-  { key: "geometry", label: "Crop & transform", keys: ["crop", "straighten", "transform"], geo: true },
+  { key: "geometry", label: "Crop & transform", keys: ["crop", "straighten", "transform", "uprightMode", "guidedLines"], geo: true },
   { key: "masks", label: "Masks", keys: ["masks"], geo: true },
   { key: "retouch", label: "Heal / clone", keys: ["retouch"], geo: true }
 ];
@@ -39,6 +39,93 @@ function mergeRecipe(cur, src, scopeSet, mode, sizeDiffers) {
   }
   return { merged, geoSkipped };
 }
+function transformKeys(pipelines, displayTransform) {
+  if (!pipelines || typeof pipelines.paramKeys !== "function") return [];
+  return pipelines.paramKeys(pipelines.effectiveId(displayTransform ?? null));
+}
+function transformBagPatch(srcBag, scopeSet, mode, keys) {
+  if (!keys || keys.length === 0) return {};
+  if (mode !== "replace" && !scopeSet.has("displayTransform")) return {};
+  const out = {};
+  for (const k of keys) out[k] = deepClone(srcBag?.[k]);
+  return out;
+}
+
+// src/confirm.js
+var photos = (n) => `${n} photo${n === 1 ? "" : "s"}`;
+var confirmApply = (ui, count) => ui.confirmDialog({
+  title: "Apply settings",
+  message: `Apply settings to ${photos(count)}?`,
+  confirmLabel: "Apply"
+});
+var confirmReset = (ui, count) => ui.confirmDialog({
+  title: "Reset edits",
+  message: `Reset edits on ${photos(count)}? Each photo returns to its original state. You can undo this from its edit history.`,
+  confirmLabel: "Reset",
+  variant: "danger"
+});
+var confirmAuto = (ui, count) => ui.confirmDialog({
+  title: "Auto-correct photos",
+  message: `Auto-correct ${photos(count)}? Each is rendered a few times, so this may take a moment.`,
+  confirmLabel: "Auto-correct"
+});
+
+// src/batch.js
+var REL_PARAMS = [
+  { key: "exposure", label: "Exposure (EV)", min: -5, max: 5, step: 0.5, def: 0.5 },
+  { key: "contrast", label: "Contrast", min: -100, max: 100, step: 5, def: 5 },
+  { key: "highlights", label: "Highlights", min: -100, max: 100, step: 5, def: 5 },
+  { key: "shadows", label: "Shadows", min: -100, max: 100, step: 5, def: 5 },
+  { key: "whites", label: "Whites", min: -100, max: 100, step: 5, def: 5 },
+  { key: "blacks", label: "Blacks", min: -100, max: 100, step: 5, def: 5 },
+  { key: "vibrance", label: "Vibrance", min: -100, max: 100, step: 5, def: 5 },
+  { key: "saturation", label: "Saturation", min: -100, max: 100, step: 5, def: 5 },
+  { key: "temperature", label: "Temperature (K)", min: 2e3, max: 5e4, step: 50, def: 100, neutral: 6500 },
+  { key: "tint", label: "Tint", min: -150, max: 150, step: 5, def: 5 }
+];
+var REL_BY_KEY = new Map(REL_PARAMS.map((p) => [p.key, p]));
+function nudge(def, value, delta) {
+  return Math.min(def.max, Math.max(def.min, (value ?? def.neutral ?? 0) + delta));
+}
+var reasonOf = (e) => (e instanceof Error ? e.message : String(e)) || "Unknown error";
+async function runTargets(ids, visit, { nameOf = (id) => id, signal, onProgress } = {}) {
+  let visited = 0;
+  const failures = [];
+  for (const id of ids) {
+    if (signal?.aborted) break;
+    try {
+      await visit(id);
+    } catch (e) {
+      failures.push({ filename: nameOf(id), reason: reasonOf(e) });
+    }
+    visited++;
+    if (onProgress) onProgress(visited, ids.length);
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  return { done: visited - failures.length, total: ids.length, failures, cancelled: visited < ids.length };
+}
+async function settleAuto(start, { cap, steps, measure }) {
+  let p = { ...start };
+  let pending = steps;
+  for (let i = 0; i < cap && pending.length; i++) {
+    const hist = await measure(p);
+    if (!hist) throw new Error("Couldn't render the photo to measure it.");
+    const next = [];
+    for (const step of pending) {
+      const { done, ...patch } = step(hist, p);
+      p = { ...p, ...patch };
+      if (!done) next.push(step);
+    }
+    pending = next;
+  }
+  return p;
+}
+function summary(res) {
+  let msg = res.cancelled ? `Cancelled after ${res.done}/${res.total}.` : `Done: ${res.done}/${res.total}.`;
+  if (res.geoSkipped) msg += ` Geometry skipped on ${res.geoSkipped} (size differs).`;
+  if (res.failures.length) msg += ` ${res.failures.length} failed.`;
+  return msg;
+}
 
 // src/index.jsx
 var api = null;
@@ -52,19 +139,6 @@ var cat = () => api.stores.useCatalogStore;
 var asShotOf = (id) => cat().getState().photos.find((p) => p.id === id)?.exif?.colorTemperature;
 var loadEditFull = (id) => dev().getState().loadEdit(id, asShotOf(id));
 var DEFAULT_GROUPS = GROUPS.filter((g) => !g.geo).map((g) => g.key);
-var REL_PARAMS = [
-  { key: "exposure", label: "Exposure (EV)", min: -5, max: 5, step: 0.5, def: 0.5 },
-  { key: "contrast", label: "Contrast", min: -100, max: 100, step: 5, def: 5 },
-  { key: "highlights", label: "Highlights", min: -100, max: 100, step: 5, def: 5 },
-  { key: "shadows", label: "Shadows", min: -100, max: 100, step: 5, def: 5 },
-  { key: "whites", label: "Whites", min: -100, max: 100, step: 5, def: 5 },
-  { key: "blacks", label: "Blacks", min: -100, max: 100, step: 5, def: 5 },
-  { key: "vibrance", label: "Vibrance", min: -100, max: 100, step: 5, def: 5 },
-  { key: "saturation", label: "Saturation", min: -100, max: 100, step: 5, def: 5 },
-  { key: "temperature", label: "Temperature", min: -100, max: 100, step: 5, def: 5 },
-  { key: "tint", label: "Tint", min: -100, max: 100, step: 5, def: 5 }
-];
-var REL_BY_KEY = new Map(REL_PARAMS.map((p) => [p.key, p]));
 function settings() {
   const g = (k, f) => api.settings.get(k, f);
   return {
@@ -76,65 +150,69 @@ function settings() {
     showRelative: g("showRelative", true)
   };
 }
-async function forEachTarget(ids, restoreId, fn, onProgress) {
+async function forEachTarget(ids, restoreId, fn, { onProgress, signal }) {
   const d = dev();
-  let done = 0;
-  const errors = [];
+  const nameOf = (id) => cat().getState().photos.find((p) => p.id === id)?.filename ?? id;
   try {
-    for (const id of ids) {
-      try {
-        await loadEditFull(id);
-        await fn(id, d.getState().params);
-      } catch {
-        errors.push(id);
-      }
-      done++;
-      if (onProgress) onProgress(done, ids.length);
-      await new Promise((r) => setTimeout(r, 0));
-    }
+    return await runTargets(ids, async (id) => {
+      await loadEditFull(id);
+      await fn(id, d.getState().params);
+    }, { nameOf, signal, onProgress });
   } finally {
     if (restoreId) await loadEditFull(restoreId);
   }
-  return errors;
 }
-async function commitParams(params, label) {
+async function commitParams(params, label, bagPatch) {
   dev().setState({ params });
+  if (bagPatch && Object.keys(bagPatch).length) dev().getState().setDynParams(bagPatch);
   await dev().getState().commitEdit(label);
 }
-async function applyRecipe({ src, srcDims, srcId, label, scopeSet, mode }, onProgress) {
+async function applyRecipe({ src, srcBag, srcKeys, srcDims, srcId, label, scopeSet, mode }, run) {
   const s = settings();
   const c = cat().getState();
   const byId = new Map(c.photos.map((p) => [p.id, p]));
   const ids = [...c.selectedIds].filter((id) => id !== srcId && byId.has(id));
   if (!ids.length) return { error: srcId ? "Select at least one other photo." : "No photos selected." };
   if (mode === "merge" && !scopeSet.size) return { error: "No groups checked." };
-  if (s.confirmAbove > 0 && ids.length > s.confirmAbove && !window.confirm(`Apply settings to ${ids.length} photos?`)) return null;
+  if (s.confirmAbove > 0 && ids.length > s.confirmAbove && !await confirmApply(api.ui, ids.length)) return null;
   let geoSkipped = 0;
   const restoreId = c.activePhotoId || dev().getState().photoId;
-  const errors = await forEachTarget(ids, restoreId, async (id, cur) => {
+  const res = await forEachTarget(ids, restoreId, async (id, cur) => {
     const photo = byId.get(id);
     const sizeDiffers = s.geometrySafety && srcDims && photo && (photo.width !== srcDims.width || photo.height !== srcDims.height);
     const { merged, geoSkipped: gs } = mergeRecipe(cur, src, scopeSet, mode, sizeDiffers);
     if (gs) geoSkipped++;
-    await commitParams(merged, label);
-  }, onProgress);
-  return { done: ids.length - errors.length, total: ids.length, geoSkipped, errors: errors.length };
+    const bagPatch = transformBagPatch(srcBag, scopeSet, mode, srcKeys);
+    await commitParams(merged, label, bagPatch);
+  }, run);
+  return { ...res, geoSkipped };
 }
-async function runSync(scopeSet, mode, onProgress) {
+async function runSync(scopeSet, mode, run) {
   const c = cat().getState();
   const sourceId = c.activePhotoId;
   if (!sourceId) return { error: "No active photo to copy from." };
   if (dev().getState().photoId !== sourceId) await loadEditFull(sourceId);
   const src = deepClone(dev().getState().params);
+  const srcBag = deepClone(dev().getState().paramBag);
+  const srcKeys = transformKeys(api.pipelines, src.displayTransform);
   const srcPhoto = c.photos.find((p) => p.id === sourceId);
-  return applyRecipe({ src, srcDims: srcPhoto, srcId: sourceId, label: settings().historyLabel, scopeSet, mode }, onProgress);
+  return applyRecipe({ src, srcBag, srcKeys, srcDims: srcPhoto, srcId: sourceId, label: settings().historyLabel, scopeSet, mode }, run);
 }
-async function runPaste(clipboard, scopeSet, mode, onProgress) {
+async function runPaste(clipboard, scopeSet, mode, run) {
   if (!clipboard) return { error: "Clipboard is empty \u2014 copy settings first." };
   const srcDims = clipboard.width && clipboard.height ? { width: clipboard.width, height: clipboard.height } : null;
-  return applyRecipe({ src: clipboard.params, srcDims, srcId: null, label: `${settings().historyLabel} (paste)`, scopeSet, mode }, onProgress);
+  return applyRecipe({
+    src: clipboard.params,
+    srcBag: clipboard.paramBag,
+    srcKeys: clipboard.transformKeys,
+    srcDims,
+    srcId: null,
+    label: `${settings().historyLabel} (paste)`,
+    scopeSet,
+    mode
+  }, run);
 }
-async function runRelative(paramKey, delta, onProgress) {
+async function runRelative(paramKey, delta, run) {
   const c = cat().getState();
   const ids = [...c.selectedIds];
   if (!ids.length) return { error: "No photos selected." };
@@ -142,23 +220,21 @@ async function runRelative(paramKey, delta, onProgress) {
   const def = REL_BY_KEY.get(paramKey);
   const label = `${def.label} ${delta > 0 ? "+" : ""}${delta}`;
   const restoreId = c.activePhotoId || dev().getState().photoId;
-  const errors = await forEachTarget(ids, restoreId, async (id, cur) => {
-    const v = Math.min(def.max, Math.max(def.min, (cur[paramKey] ?? 0) + delta));
+  return forEachTarget(ids, restoreId, async (id, cur) => {
+    const v = nudge(def, cur[paramKey], delta);
     if (v === cur[paramKey]) return;
     await commitParams({ ...cur, [paramKey]: v }, label);
-  }, onProgress);
-  return { done: ids.length - errors.length, total: ids.length, errors: errors.length };
+  }, run);
 }
-async function runReset(onProgress) {
+async function runReset(run) {
   const c = cat().getState();
   const ids = [...c.selectedIds];
   if (!ids.length) return { error: "No photos selected." };
-  if (!window.confirm(`Reset edits on ${ids.length} photo${ids.length > 1 ? "s" : ""}?`)) return null;
+  if (!await confirmReset(api.ui, ids.length)) return null;
   const restoreId = c.activePhotoId || dev().getState().photoId;
-  const errors = await forEachTarget(ids, restoreId, async () => {
+  return forEachTarget(ids, restoreId, async () => {
     await dev().getState().reset();
-  }, onProgress);
-  return { done: ids.length - errors.length, total: ids.length, errors: errors.length };
+  }, run);
 }
 var AUTO_TEMP_MIN = 2e3;
 var AUTO_TEMP_MAX = 5e4;
@@ -297,7 +373,7 @@ function histFromBitmap(bmp) {
   }
   return { r, g, b, luma };
 }
-async function runAuto({ tone, wb }, onProgress) {
+async function runAuto({ tone, wb }, run) {
   if (!api.develop || !api.develop.renderPhotoFrame) {
     return { error: "Batch Auto needs a newer Safelight (renderPhotoFrame API)." };
   }
@@ -305,35 +381,29 @@ async function runAuto({ tone, wb }, onProgress) {
   const c = cat().getState();
   const ids = [...c.selectedIds];
   if (!ids.length) return { error: "No photos selected." };
-  if (s.confirmAbove > 0 && ids.length > s.confirmAbove && !window.confirm(`Auto-correct ${ids.length} photos? Each is rendered a few times \u2014 this may take a moment.`)) return null;
+  if (s.confirmAbove > 0 && ids.length > s.confirmAbove && !await confirmAuto(api.ui, ids.length)) return null;
   const label = tone && wb ? "Auto Tone + WB" : tone ? "Auto Tone" : "Auto White Balance";
   const cap = tone && wb ? 10 : 8;
   const restoreId = c.activePhotoId || dev().getState().photoId;
-  const errors = await forEachTarget(ids, restoreId, async (id, cur) => {
+  return forEachTarget(ids, restoreId, async (id, cur) => {
     const asShot = dev().getState().asShotTemperature ?? 6500;
     const bag = deepClone(dev().getState().paramBag) || {};
-    let p = { ...cur };
-    let toneDone = !tone, wbDone = !wb;
-    for (let i = 0; i < cap && !(toneDone && wbDone); i++) {
-      const bmp = await api.develop.renderPhotoFrame(id, p, bag);
-      if (!bmp) break;
-      const hist = histFromBitmap(bmp);
-      if (bmp && typeof bmp.close === "function") bmp.close();
-      if (!hist) break;
-      if (tone && !toneDone) {
-        const st = autoToneStep(hist, p);
-        p = { ...p, exposure: st.exposure, contrast: st.contrast, highlights: st.highlights, shadows: st.shadows, whites: st.whites, blacks: st.blacks };
-        toneDone = st.done;
+    const steps = [];
+    if (tone) steps.push(autoToneStep);
+    if (wb) steps.push((hist, p2) => autoWhiteBalanceStep(hist, p2, asShot));
+    const p = await settleAuto(cur, {
+      cap,
+      steps,
+      measure: async (trial) => {
+        const bmp = await api.develop.renderPhotoFrame(id, trial, bag);
+        if (!bmp) return null;
+        const hist = histFromBitmap(bmp);
+        if (typeof bmp.close === "function") bmp.close();
+        return hist;
       }
-      if (wb && !wbDone) {
-        const st = autoWhiteBalanceStep(hist, p, asShot);
-        p = { ...p, temperature: st.temperature, tint: st.tint };
-        wbDone = st.done;
-      }
-    }
-    await commitParams(p, label);
-  }, onProgress);
-  return { done: ids.length - errors.length, total: ids.length, errors: errors.length };
+    });
+    if (Object.keys(p).some((k) => p[k] !== cur[k])) await commitParams(p, label);
+  }, run);
 }
 function makeStore() {
   const s = settings();
@@ -341,12 +411,16 @@ function makeStore() {
   const initialScope = new Set(Array.isArray(savedGroups) ? savedGroups : DEFAULT_GROUPS);
   return api.stores.create((set, get) => ({
     clipboard: null,
-    // { params, sourceName, width, height }
+    // { params, paramBag, transformKeys, sourceName, width, height }
     scope: initialScope,
     mode: s.syncMode === "replace" ? "replace" : "merge",
     busy: false,
     progress: null,
     status: "",
+    failures: [],
+    // { filename, reason } from the last run
+    abort: null,
+    // the running job's AbortController
     setScope(next) {
       set({ scope: next });
       if (settings().rememberGroups) api.settings.set("groups", [...next]);
@@ -370,59 +444,67 @@ function makeStore() {
       const photo = c.photos.find((p) => p.id === sourceId);
       const d = dev();
       const prevId = d.getState().photoId;
-      let params;
+      let params, paramBag;
       if (prevId !== sourceId) {
         await loadEditFull(sourceId);
         params = deepClone(d.getState().params);
+        paramBag = deepClone(d.getState().paramBag);
         if (prevId) await loadEditFull(prevId);
       } else {
         params = deepClone(d.getState().params);
+        paramBag = deepClone(d.getState().paramBag);
       }
       const name = photo ? photo.filename : "photo";
       set({
-        clipboard: { params, sourceName: name, width: photo?.width, height: photo?.height },
+        clipboard: {
+          params,
+          paramBag,
+          transformKeys: transformKeys(api.pipelines, params.displayTransform),
+          sourceName: name,
+          width: photo?.width,
+          height: photo?.height
+        },
         status: `Copied settings from ${name}.`
       });
     },
     async _run(job) {
       if (get().busy) return;
-      set({ busy: true, status: "", progress: null });
+      const abort = new AbortController();
+      set({ busy: true, status: "", failures: [], progress: null, abort });
       try {
-        const res = await job((done, total) => set({ progress: { done, total } }));
+        const res = await job({ onProgress: (done, total) => set({ progress: { done, total } }), signal: abort.signal });
         if (res == null) set({ status: "Cancelled." });
         else if (res.error) set({ status: res.error });
-        else {
-          let msg = `Done: ${res.done}/${res.total}.`;
-          if (res.geoSkipped) msg += ` Geometry skipped on ${res.geoSkipped} (size differs).`;
-          if (res.errors) msg += ` ${res.errors} failed.`;
-          set({ status: msg });
-        }
+        else set({ status: summary(res), failures: res.failures });
       } catch (e) {
         set({ status: "Error: " + (e && e.message ? e.message : String(e)) });
       } finally {
-        set({ busy: false, progress: null });
+        set({ busy: false, progress: null, abort: null });
       }
     },
+    cancel() {
+      get().abort?.abort();
+    },
     paste() {
-      return get()._run((p) => runPaste(get().clipboard, get().scope, get().mode, p));
+      return get()._run((r) => runPaste(get().clipboard, get().scope, get().mode, r));
     },
     sync() {
-      return get()._run((p) => runSync(get().scope, get().mode, p));
+      return get()._run((r) => runSync(get().scope, get().mode, r));
     },
     relative(key, delta) {
-      return get()._run((p) => runRelative(key, delta, p));
+      return get()._run((r) => runRelative(key, delta, r));
     },
     reset() {
       return get()._run(runReset);
     },
     autoTone() {
-      return get()._run((p) => runAuto({ tone: true, wb: false }, p));
+      return get()._run((r) => runAuto({ tone: true, wb: false }, r));
     },
     autoWB() {
-      return get()._run((p) => runAuto({ tone: false, wb: true }, p));
+      return get()._run((r) => runAuto({ tone: false, wb: true }, r));
     },
     autoBoth() {
-      return get()._run((p) => runAuto({ tone: true, wb: true }, p));
+      return get()._run((r) => runAuto({ tone: true, wb: true }, r));
     }
   }));
 }
@@ -437,7 +519,9 @@ var S = {
   title: { fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--color-text-secondary)", display: "flex", justifyContent: "space-between", alignItems: "baseline" },
   grid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 8px" },
   check: { display: "flex", alignItems: "center", gap: "5px", cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden" },
-  status: { color: "var(--color-text-secondary)", minHeight: "13px" }
+  status: { color: "var(--color-text-secondary)", minHeight: "13px" },
+  failures: { display: "flex", flexDirection: "column", gap: "2px", maxHeight: "96px", overflowY: "auto", color: "var(--color-text-secondary)" },
+  failure: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
 };
 function Section({ id, title, openByDefault, open, onToggle, right, children }) {
   const isOpen = open[id] ?? openByDefault;
@@ -448,7 +532,7 @@ function BatchPanel() {
   const ui = api.ui;
   const { useState, useEffect } = React;
   const selectedIds = cat()((s2) => s2.selectedIds);
-  const photos = cat()((s2) => s2.photos);
+  const photos2 = cat()((s2) => s2.photos);
   const activeId = cat()((s2) => s2.activePhotoId);
   const clipboard = store((s2) => s2.clipboard);
   const scope = store((s2) => s2.scope);
@@ -456,6 +540,7 @@ function BatchPanel() {
   const busy = store((s2) => s2.busy);
   const progress = store((s2) => s2.progress);
   const status = store((s2) => s2.status);
+  const failures = store((s2) => s2.failures);
   const st = store.getState();
   const [, setTick] = useState(0);
   useEffect(() => api.settings.onChange(() => setTick((t) => t + 1)), []);
@@ -465,7 +550,7 @@ function BatchPanel() {
   const [relKey, setRelKey] = useState(REL_PARAMS[0].key);
   const relDef = REL_BY_KEY.get(relKey);
   const [relAmount, setRelAmount] = useState(relDef.def);
-  const source = photos.find((p) => p.id === activeId);
+  const source = photos2.find((p) => p.id === activeId);
   const syncTargets = activeId ? [...selectedIds].filter((id) => id !== activeId).length : 0;
   const noGroups = mode === "merge" && scope.size === 0;
   const pct = progress && progress.total ? Math.round(100 * progress.done / progress.total) : 0;
@@ -530,7 +615,7 @@ function BatchPanel() {
       title: "Auto tone + white balance on every selected photo"
     },
     busy && progress ? `Auto ${progress.done}/${progress.total}\u2026` : `Auto Tone + WB \xB7 ${selectedIds.size} selected`
-  )), /* @__PURE__ */ h(Section, { id: "reset", title: "Reset", open, onToggle }, /* @__PURE__ */ h(ui.Button, { full: true, disabled: busy || !selectedIds.size, onClick: () => st.reset() }, "Reset ", selectedIds.size, " selected")), busy && progress && /* @__PURE__ */ h(ui.ProgressBar, { value: pct / 100 }), /* @__PURE__ */ h("div", { style: S.status }, status));
+  )), /* @__PURE__ */ h(Section, { id: "reset", title: "Reset", open, onToggle }, /* @__PURE__ */ h(ui.Button, { full: true, disabled: busy || !selectedIds.size, onClick: () => st.reset() }, "Reset ", selectedIds.size, " selected")), busy && progress && /* @__PURE__ */ h(ui.Row, { gap: 6 }, /* @__PURE__ */ h("div", { style: { flex: 1 } }, /* @__PURE__ */ h(ui.ProgressBar, { value: pct / 100 })), /* @__PURE__ */ h(ui.Button, { variant: "ghost", size: "sm", onClick: () => st.cancel(), title: "Stop after the photo in progress" }, "Cancel")), /* @__PURE__ */ h("div", { style: S.status }, status), failures.length > 0 && /* @__PURE__ */ h("div", { style: S.failures }, failures.map((f, i) => /* @__PURE__ */ h("span", { key: i, style: S.failure, title: `${f.filename}: ${f.reason}` }, f.filename, ": ", f.reason))));
 }
 function activate(_api) {
   api = _api;

@@ -8,7 +8,7 @@ const fakeUi = (answer) => {
   return { calls, confirmDialog: async (options) => { calls.push(options); return answer; } };
 };
 
-test("applying to many photos asks in the app's dialog and reports the answer", async () => {
+test("applying to many photos asks in the app's dialogue and reports the answer", async () => {
   const yes = fakeUi(true);
   assert.equal(await confirmApply(yes, 12), true);
   assert.equal(yes.calls.length, 1);
@@ -18,7 +18,7 @@ test("applying to many photos asks in the app's dialog and reports the answer", 
   assert.equal(await confirmApply(fakeUi(false), 12), false);
 });
 
-test("reset is a danger dialog that names the count, and cancel aborts it", async () => {
+test("reset is a danger dialogue that names the count, and cancel aborts it", async () => {
   const ui = fakeUi(false);
   assert.equal(await confirmReset(ui, 1), false);
   assert.equal(ui.calls[0].variant, "danger");
@@ -36,7 +36,7 @@ test("batch auto-correct asks before rendering many photos, and cancel aborts it
   assert.equal(await confirmAuto(fakeUi(true), 40), true);
 });
 
-test("the panel never opens a native dialog", () => {
+test("the panel never opens a native dialogue", () => {
   const src = readFileSync(new URL("../src/index.jsx", import.meta.url), "utf8");
   assert.doesNotMatch(src, /window\.(confirm|alert|prompt)\s*\(/);
   assert.doesNotMatch(src, /(?<![.\w])(confirm|alert|prompt)\s*\(/);
